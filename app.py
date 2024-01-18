@@ -2,16 +2,20 @@ import feedparser
 import asyncio
 import requests
 import os
+from datetime import datetime
 
 DATA_FOLDER = "data"
 if not os.path.exists(DATA_FOLDER):
     os.makedirs(DATA_FOLDER)
 
-WEBHOOK_URL = "WEBHOOK_URL"
+#webhook & rss need to have same position in array
 
-#edit ACCOUNT_NAME to Twitter username
+WEBHOOK_URLS = [
+    "webhook",
+]
+
 LAST_ENTRY_IDS = {
-    "https://nitter.poast.org/ACCOUNT_NAME/rss": None,
+    "rss": None,
 }
 
 def load_last_id(feed_url):
@@ -29,29 +33,46 @@ def save_last_id(feed_url, last_id):
     with open(file_path, "w") as file:
         file.write(last_id)
 
-async def send_rss_news(feed_url):
+async def send_rss_news(feed_url, webhook_url):
     while True:
-        feed = feedparser.parse(feed_url)
-        if len(feed.entries) > 0:
-            latest_entry = feed.entries[0]
-            last_id = load_last_id(feed_url)
-            if latest_entry.id != last_id:
-                news_link = latest_entry.link
-                message = f"{news_link}"
+        try:
+            feed = feedparser.parse(feed_url)
+            if len(feed.entries) > 0:
+                latest_entry = feed.entries[0]
+                last_id = load_last_id(feed_url)
+                if latest_entry.id != last_id:
+                    news_link = latest_entry.link
+                    message = f"{news_link}"
 
-                payload = {"content": message}
+                    payload = {"content": message}
 
-                response = requests.post(WEBHOOK_URL, json=payload)
-                if response.status_code == 204:
-                    print("++++++++++++++++")
-
-                save_last_id(feed_url, latest_entry.id)
-
-        await asyncio.sleep(3)
+                    response = requests.post(webhook_url, json=payload)
+                    if response.status_code == 204:
+                        now = datetime.now()
+                        current_time = now.strftime("%H:%M:%S")
+                        print(current_time + " new message in: " + feed_url)
+                    elif response.status_code == 429:
+                        print("RATE LIMITED")
+                    else:
+                        print("WRONG WEBHOOK RESPONSE: " + str(response.status_code))
+                    save_last_id(feed_url, latest_entry.id)
+                await asyncio.sleep(5)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+        finally:
+            await asyncio.sleep(60)
 
 async def start_webhook_rss():
-    tasks = [send_rss_news(feed_url) for feed_url in LAST_ENTRY_IDS.keys()]
+    tasks = [send_rss_news(feed_url, WEBHOOK_URLS[i]) for i, feed_url in enumerate(LAST_ENTRY_IDS.keys())]
     await asyncio.gather(*tasks)
 
-loop = asyncio.get_event_loop()
-loop.run_until_complete(start_webhook_rss())
+try:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        print("Running...")
+        loop.run_until_complete(start_webhook_rss())
+    except KeyboardInterrupt:
+        pass
+except Exception as e:
+    print(f"An error occurred: {e}")
